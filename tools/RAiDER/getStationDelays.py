@@ -18,6 +18,8 @@ import requests
 
 from RAiDER.logger import logger
 
+_UNR_STATIONS_LLH_URL = 'http://geodesy.unr.edu/NGLStationPages/llh.out'
+
 
 def get_delays_UNR(stationFile, filename, dateList, returnTime=None):
     '''
@@ -174,9 +176,16 @@ def get_delays_UNR(stationFile, filename, dateList, returnTime=None):
     return
 
 
-def get_station_data(inFile, dateList, gps_repo=None, numCPUs=8, outDir=None, returnTime=None):
+def get_station_data(inFile, dateList, returnTime, gps_repo=None, numCPUs=8, outDir=None):
     '''
     Pull tropospheric delay data for a given station name
+
+    Args
+        inFile: string               - Name of file you want to process
+        dateList: list               - Date in string format in a list
+        returnTime: string           - "HH:MM:SS"
+
+
     '''
     if outDir is None:
         outDir = os.getcwd()
@@ -188,10 +197,8 @@ def get_station_data(inFile, dateList, gps_repo=None, numCPUs=8, outDir=None, re
     returnTime = seconds_of_day(returnTime)
     # print warning if not divisible by 3 seconds
     if returnTime % 3 != 0:
-        index = np.argmin(
-            np.abs(np.array(list(range(0, 86400, 300))) - returnTime))
-        updatedreturnTime = str(dt.timedelta(
-            seconds=list(range(0, 86400, 300))[index]))
+        index = np.argmin(np.abs(np.array(list(range(0, 86400, 300))) - returnTime))
+        updatedreturnTime = list(range(0, 86400, 300))[index]
         logger.warning(
             'input time %s not divisible by 3 seconds, so next closest time %s '
             'will be chosen', returnTime, updatedreturnTime
@@ -214,6 +221,7 @@ def get_station_data(inFile, dateList, gps_repo=None, numCPUs=8, outDir=None, re
                 args.append((sf, name, dateList, returnTime))
                 outputfiles.append(name)
             # Parallelize remote querying of zenith delays
+
             with multiprocessing.Pool(numCPUs) as multipool:
                 multipool.starmap(get_delays_UNR, args)
 
@@ -231,16 +239,20 @@ def get_station_data(inFile, dateList, gps_repo=None, numCPUs=8, outDir=None, re
     del statsFile
 
     # Add lat/lon/height info
-    origstatsFile = pd.read_csv(inFile)
-    statsFile = pd.read_csv(name)
-    statsFile = pd.merge(left=statsFile, right=origstatsFile[['ID', 'Lat', 'Lon', 'Hgt_m']], how='left', left_on='ID', right_on='ID')
+    stat_urls = pd.read_csv(inFile)
+    stat_delays = pd.read_csv(name)
+    try:
+        statsFile = pd.merge(left=stat_delays, right=stat_urls[['ID', 'Lat', 'Lon', 'Hgt_m']], how='left', left_on='ID', right_on='ID')
+    except KeyError:
+        station_llh = pd.read_csv(_UNR_STATIONS_LLH_URL, names=['ID', 'Lat', 'Lon', 'Hgt_m'], delim_whitespace=True)
+        stat_urls = pd.merge(left=stat_urls, right=station_llh, how='left', left_on='ID', right_on='ID')
+        statsFile = pd.merge(left=stat_delays, right=stat_urls[['ID', 'Lat', 'Lon', 'Hgt_m']], how='left', left_on='ID', right_on='ID')
     # drop all lines with nans and sort by station ID and year
     statsFile.dropna(how='any', inplace=True)
     # drop all duplicate lines
     statsFile.drop_duplicates(inplace=True)
     statsFile.sort_values(['ID', 'Date'])
     statsFile.to_csv(name, index=False)
-    del origstatsFile, statsFile
 
 
 def get_date(stationFile):
