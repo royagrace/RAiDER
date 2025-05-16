@@ -188,18 +188,29 @@ class ECMWF(WeatherModel):
             'type': 'an',
             'date': corrected_DT.strftime('%Y-%m-%d'),
             'time': dt.time.strftime(corrected_DT.time(), '%H:%M'),
-            # step: With type=an, step is always "0". With type=fc, step can
-            # be any of "3/6/9/12".
             'step': '0',
             'area': bbox,
-            'grid': [0.25, 0.25],
-            'format': 'netcdf',
+            "download_format": "unarchived",
+            'data_format': 'netcdf',
+            "pressure_level": [
+                "1", "2", "3",
+                "5", "7", "10",
+                "20", "30", "50",
+                "70", "100", "125",
+                "150", "175", "200",
+                "225", "250", "300",
+                "350", "400", "450",
+                "500", "550", "600",
+                "650", "700", "750",
+                "775", "800", "825",
+                "850", "875", "900",
+                "925", "950", "975",
+                "1000"
+            ],
         }
 
-        try:
-            c.retrieve('reanalysis-era5-complete', dataDict, outname)
-        except:
-            raise Exception
+        self._model_level_type = 'pl'
+        c.retrieve('reanalysis-era5-pressure-levels', dataDict, outname)
 
     def _download_ecmwf(self, lat_min, lat_max, lat_step, lon_min, lon_max, lon_step, time, out) -> None:
         """Used for HRES."""
