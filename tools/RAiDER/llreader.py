@@ -205,33 +205,50 @@ def _is_geoid_crs(crs: CRS) -> bool:
     return crs == _EGM2008_CRS or bool(crs.sub_crs_list)
 
 
-def _parse_crs(crs: Optional[Union[int, str, CRS]]) -> CRS:
-    """Parse an EPSG code (int or str), CRS string, or CRS object into a pyproj CRS.
+def _parse_height_datum(datum: Optional[Union[int, str, CRS]]) -> CRS:
+    """Resolve a height datum to a pyproj CRS with a real vertical axis.
 
-    Always returns a CRS with a real vertical axis, so it can be handed
-    straight to PROJ as the source or target of a height transform:
+    Accepts the vocabulary used everywhere a datum is named -- the
+    ``height_datum``/``dem_height_datum`` run-config options, the ``Hgt_datum``
+    column, and these constructors:
+
+    * ``'ellipsoidal'`` -- heights above the WGS84 ellipsoid (EPSG:4979), the
+      native datum of GNSS positions and ISCE geometry rasters.
+    * ``'geoid'`` -- heights above the geoid / MSL (EPSG:9518), the native
+      datum of GLO-30 and SRTM, and what the weather-model cube samples in.
+
+    An EPSG code or CRS object is also accepted, for callers working in CRS
+    terms directly. Whatever comes in, the result always carries a vertical
+    axis so it can be handed straight to PROJ as the source or target of a
+    height transform:
 
     * None -- a blank value in a run config, which is how template.yaml leaves
-      every other key -- means "unspecified" and falls back to WGS84 ellipsoidal.
-    * A 2D CRS (e.g. the documented ``crs=4326``) carries no vertical axis at
-      all. RAiDER has always read that as "these heights are MSL", so it is
-      normalised to EPSG:9518, which says the same thing in a form PROJ can
-      actually transform from. Without this, a 2D CRS reaching a transform is
-      silently untransformable and the conversion is skipped.
+      every other key -- means "unspecified" and falls back to ellipsoidal.
+    * A 2D CRS (e.g. ``4326``) carries no vertical axis at all. RAiDER has
+      always read that as "these heights are MSL", so it is normalised to
+      EPSG:9518, which says the same thing in a form PROJ can transform from.
+      Without this, a 2D CRS reaching a transform is silently untransformable
+      and the conversion is skipped.
     """
-    if crs is None:
+    if datum is None:
         return _WGS84_3D_CRS
-    if isinstance(crs, CRS):
-        parsed = crs
+    if isinstance(datum, str):
+        if datum.strip().lower() == _ELLIPSOIDAL_LABEL:
+            return _WGS84_3D_CRS
+        if datum.strip().lower() == _GEOID_LABEL:
+            return _EGM2008_CRS
+    if isinstance(datum, CRS):
+        parsed = datum
     else:
         try:
-            parsed = CRS.from_epsg(crs)
+            parsed = CRS.from_epsg(datum)
         except pyproj.exceptions.CRSError:
-            parsed = CRS(crs)
+            parsed = CRS(datum)
 
     if len(parsed.axis_info) < 3:
         return _EGM2008_CRS
     return parsed
+
 
 
 HGT_DATUM_COLUMN = 'Hgt_datum'
@@ -413,7 +430,7 @@ def _ellipsoidal_to_geometric(
         already geoid-referenced are returned unchanged, via the identity
         short-circuit in _convert_height_datum.
     """
-    return _convert_height_datum(lats, lons, heights, _parse_crs(crs), _EGM2008_CRS)
+    return _convert_height_datum(lats, lons, heights, _parse_height_datum(crs), _EGM2008_CRS)
 
 
 def _geometric_to_ellipsoidal(
@@ -446,9 +463,9 @@ class StationFile(AOI):
     """Use a .csv file containing at least Lat, Lon, and optionally Hgt_m columns.
 
     A ``Hgt_m`` column is assumed to be WGS84 ellipsoidal by default
-    (``crs=4979``), matching GNSS station positions such as UNR MAGNET /
-    IGS20. Pass ``crs=4326`` when the file holds geoid-referenced (MSL)
-    heights instead.
+    (``height_datum='ellipsoidal'``), matching GNSS station positions such as
+    UNR MAGNET / IGS20. Pass ``height_datum='geoid'`` when the file holds
+    geoid-referenced (MSL) heights instead.
 
     Heights filled in from a DEM are a separate case: GLO-30 is distributed
     against the geoid and RAiDER keeps it that way (see dem.py), so those are
@@ -465,24 +482,27 @@ class StationFile(AOI):
         demFile: Optional[Union[str, Path]] = None,
         cube_spacing_in_m: Optional[float] = None,
         output_directory: Union[str, Path] = Path.cwd(),
-        crs: Union[int, str, CRS] = 4979,
+        height_datum: Union[int, str, CRS] = _ELLIPSOIDAL_LABEL,
+        dem_height_datum: Union[int, str, CRS] = _GEOID_LABEL,
     ) -> None:
         super().__init__(cube_spacing_in_m, output_directory)
         self._filename = station_file
         self._demfile = demFile
         self._bounding_box = bounds_from_csv(station_file)
         self._type = 'station_file'
-        self._crs = _parse_crs(crs)
+        self._crs = _parse_height_datum(height_datum)
+        self._dem_crs = _parse_height_datum(dem_height_datum)
 
-    def update_crs(self, new_crs: Union[int, str, CRS]) -> None:
-        """Update the CRS describing the height datum of the station file.
+    def update_height_datum(self, new_datum: Union[int, str, CRS]) -> None:
+        """Update the datum describing the file's Hgt_m column.
 
         Args:
-            new_crs: EPSG code (int or str), CRS string, or pyproj CRS object.
-                     ``4979`` (default) — heights are WGS84 ellipsoidal (e.g. from GNSS/UNR).
-                     ``4326`` — heights are geoid-referenced (MSL).
+            new_datum: ``'ellipsoidal'`` (default) -- heights above the WGS84
+                       ellipsoid, e.g. from GNSS/UNR. ``'geoid'`` -- heights
+                       above the geoid (MSL). An EPSG code or CRS object is
+                       also accepted.
         """
-        self._crs = _parse_crs(new_crs)
+        self._crs = _parse_height_datum(new_datum)
 
     def readLL(self) -> tuple[np.ndarray, np.ndarray]:
         """Read the station lat/lons from the csv file."""
@@ -503,7 +523,8 @@ class StationFile(AOI):
         present (authoritative -- written by this method whenever it writes
         DEM-derived heights, so it can't go stale the way ``self._crs``
         could), otherwise from ``self._crs`` (default WGS84 ellipsoidal,
-        ``crs=4979``) for files written before that column existed.  If the
+        ``height_datum='ellipsoidal'``) for files written before that column
+        existed.  If the
         file has no ``Hgt_m`` column, heights are DEM-derived and therefore
         geoid-referenced whatever ``self._crs`` says; they are written back
         to the file with that datum recorded, and ``self._crs`` updated to
@@ -543,18 +564,18 @@ class StationFile(AOI):
 
             # write the elevations to the file and record the datum so a
             # later readZ() call -- on this object or a fresh one -- knows
-            # what it's looking at, whatever crs= it happens to be given.
+            # what it's looking at, whatever datum it happens to be given.
+            source_is_geoid = _is_geoid_crs(self._dem_crs)
             df['Hgt_m'] = heights
-            df[HGT_DATUM_COLUMN] = _GEOID_LABEL
+            df[HGT_DATUM_COLUMN] = _GEOID_LABEL if source_is_geoid else _ELLIPSOIDAL_LABEL
             df.to_csv(self._filename, index=False)
             self._demfile = None
-            self._crs = _EGM2008_CRS
-            source_is_geoid = True
+            self._crs = self._dem_crs
 
         if geoid_heights == source_is_geoid:
             return heights
         if geoid_heights:
-            # _parse_crs guarantees self._crs has a vertical axis, so this is
+            # _parse_height_datum guarantees a vertical axis, so this is
             # always transformable. When the Hgt_datum column outranks
             # self._crs and says these are ellipsoidal, a self._crs that
             # disagrees would make src == dst and no-op, so trust the column.
@@ -576,9 +597,11 @@ class RasterRDR(AOI):
         convention='isce',
         cube_spacing_in_m: Optional[float] = None,
         output_directory=os.getcwd(),
+        dem_height_datum: Union[int, str, CRS] = _GEOID_LABEL,
     ) -> None:
         super().__init__(cube_spacing_in_m, output_directory)
         self._type = 'radar_rasters'
+        self._dem_crs = _parse_height_datum(dem_height_datum)
         self._latfile = lat_file
         self._lonfile = lon_file
 
@@ -649,7 +672,7 @@ class RasterRDR(AOI):
                 dem_path=Path(demFile),
             )
             hgts = interpolateDEM(demFile, self.readLL())
-            source_is_geoid = True  # GLO-30 is geoid-referenced
+            source_is_geoid = _is_geoid_crs(self._dem_crs)
 
         if geoid_heights == source_is_geoid:
             return hgts
@@ -685,9 +708,15 @@ class GeocodedFile(AOI):
     _is_dem: bool
 
     def __init__(
-        self, path: Path, is_dem=False, cube_spacing_in_m: Optional[float] = None, output_directory=os.getcwd()
+        self,
+        path: Path,
+        is_dem=False,
+        cube_spacing_in_m: Optional[float] = None,
+        output_directory=os.getcwd(),
+        dem_height_datum: Union[int, str, CRS] = _GEOID_LABEL,
     ) -> None:
         super().__init__(cube_spacing_in_m, output_directory)
+        self._dem_crs = _parse_height_datum(dem_height_datum)
 
         from RAiDER.utilFcns import rio_extents, rio_profile, rio_stats
 
@@ -739,8 +768,10 @@ class GeocodedFile(AOI):
         lats, lons = self.readLL()
         z_out = interpolateDEM(demFile, (lats, lons))
 
-        if geoid_heights:
+        if geoid_heights == _is_geoid_crs(self._dem_crs):
             return z_out
+        if geoid_heights:
+            return _ellipsoidal_to_geometric(lats, lons, z_out, self._dem_crs)
         return _geometric_to_ellipsoidal(lats, lons, z_out)
 
 

@@ -102,9 +102,10 @@ def test_gnss_intersect(tmp_path: Path, wm_name: str, gold: np.float64) -> None:
         # -5.2 m is the WGS84 ellipsoidal height of a station ~30 m above sea
         # level: the geoid sits ~35 m below the ellipsoid near LA, so
         # h = H + N = 30 - 35. Read as MSL it would put Torrance (true
-        # elevation ~25-27 m) below sea level. Stated explicitly though 4979 is
+        # elevation ~25-27 m) below sea level. Stated explicitly though it is
         # default, since getting this wrong silently disables the conversion.
-        'aoi_group': {'station_file': str(gnss_file), 'station_file_crs': 4979},
+        'aoi_group': {'station_file': str(gnss_file)},
+        'height_group': {'height_datum': 'ellipsoidal'},
         'runtime_group': {
             'output_directory': outdir,
             'weather_model_directory': WM_DIR,

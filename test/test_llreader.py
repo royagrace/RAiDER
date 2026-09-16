@@ -22,7 +22,7 @@ from RAiDER.llreader import (
     Geocube,
     bounds_from_latlon_rasters,
     bounds_from_csv,
-    _parse_crs,
+    _parse_height_datum,
     _ellipsoidal_to_geometric,
     _geometric_to_ellipsoidal,
     _source_is_geoid,
@@ -223,35 +223,35 @@ def test_GeocodedFile():
 
 
 # ---------------------------------------------------------------------------
-# _parse_crs
+# _parse_height_datum
 # ---------------------------------------------------------------------------
 
 
-def test_parse_crs_passes_through_3d_crs_object():
+def test_parse_height_datum_passes_through_3d_crs_object():
     crs_obj = CRS.from_epsg(4979)
-    assert _parse_crs(crs_obj) is crs_obj
+    assert _parse_height_datum(crs_obj) is crs_obj
 
 
-def test_parse_crs_from_int_epsg():
-    assert _parse_crs(4979) == CRS.from_epsg(4979)
+def test_parse_height_datum_from_int_epsg():
+    assert _parse_height_datum(4979) == CRS.from_epsg(4979)
 
 
-def test_parse_crs_normalizes_2d_to_geoid():
+def test_parse_height_datum_normalizes_2d_to_geoid():
     """A 2D CRS has no vertical axis for PROJ to transform from, and RAiDER
     reads it as "these heights are MSL" -- so it becomes EPSG:9518, which says
     that in a transformable form."""
     for value in (4326, '4326', 'EPSG:4326', CRS.from_epsg(4326)):
-        assert _parse_crs(value) == CRS.from_epsg(9518)
+        assert _parse_height_datum(value) == CRS.from_epsg(9518)
 
 
-def test_parse_crs_none_defaults_to_ellipsoidal():
+def test_parse_height_datum_none_defaults_to_ellipsoidal():
     """A blank value in a run config means unspecified, not invalid."""
-    assert _parse_crs(None) == CRS.from_epsg(4979)
+    assert _parse_height_datum(None) == CRS.from_epsg(4979)
 
 
-def test_parse_crs_invalid_string_raises():
+def test_parse_height_datum_invalid_string_raises():
     with pytest.raises(pyproj.exceptions.CRSError):
-        _parse_crs('not_a_real_crs')
+        _parse_height_datum('not_a_real_crs')
 
 
 def test_is_geoid_crs_distinguishes_9518_from_4979():
@@ -338,30 +338,30 @@ def test_stationfile_default_crs(station_file):
 
 
 def test_stationfile_geoid_crs(station_file):
-    """The documented crs=4326 still means "geoid", now stored as the
+    """The documented height_datum='geoid' still means geoid, now stored as the
     transformable EPSG:9518 rather than a 2D CRS PROJ can't convert from."""
-    query = StationFile(station_file, crs=4326)
+    query = StationFile(station_file, height_datum='geoid')
     assert query._crs == CRS.from_epsg(9518)
     assert _is_geoid_crs(query._crs) is True
 
 
-def test_stationfile_update_crs(station_file):
+def test_stationfile_update_height_datum(station_file):
     query = StationFile(station_file)
-    query.update_crs(4326)  # normalised to the geoid CRS it stands for
+    query.update_height_datum(4326)  # normalised to the geoid CRS it stands for
     assert query._crs == CRS.from_epsg(9518)
 
-    query.update_crs(4979)
+    query.update_height_datum(4979)
     assert query._crs == CRS.from_epsg(4979)
 
 
 def test_readZ_sf_default_ellipsoidal_no_conversion(station_file):
-    """crs=4979 (ellipsoidal, the default): readZ()'s default request needs no conversion."""
-    query = StationFile(station_file, crs=4979)
+    """height_datum='ellipsoidal' (the default): readZ()'s default request needs no conversion."""
+    query = StationFile(station_file, height_datum='ellipsoidal')
     assert np.allclose(query.readZ(), 0.1)
 
 
 def test_readZ_sf_default_converts_from_declared_geoid(monkeypatch, station_file):
-    """crs=4326 (geoid): readZ()'s default (ellipsoidal) request routes through _geometric_to_ellipsoidal."""
+    """height_datum='geoid': readZ()'s default (ellipsoidal) request routes through _geometric_to_ellipsoidal."""
     calls = {}
 
     def fake_convert(lats, lons, heights):
@@ -370,7 +370,7 @@ def test_readZ_sf_default_converts_from_declared_geoid(monkeypatch, station_file
 
     monkeypatch.setattr('RAiDER.llreader._geometric_to_ellipsoidal', fake_convert)
 
-    query = StationFile(station_file, crs=4326)
+    query = StationFile(station_file, height_datum='geoid')
     z = query.readZ()
 
     assert calls.get('called') is True
@@ -378,13 +378,13 @@ def test_readZ_sf_default_converts_from_declared_geoid(monkeypatch, station_file
 
 
 def test_readZ_sf_geoid_request_no_conversion_when_declared_geoid(station_file):
-    """crs=4326 (geoid): readZ(geoid_heights=True) needs no conversion."""
-    query = StationFile(station_file, crs=4326)
+    """height_datum='geoid': readZ(geoid_heights=True) needs no conversion."""
+    query = StationFile(station_file, height_datum='geoid')
     assert np.allclose(query.readZ(geoid_heights=True), 0.1)
 
 
 def test_readZ_sf_geoid_request_converts_from_ellipsoidal(monkeypatch, station_file):
-    """crs=4979 (ellipsoidal, the default): readZ(geoid_heights=True) routes through _ellipsoidal_to_geometric."""
+    """height_datum='ellipsoidal' (the default): readZ(geoid_heights=True) routes through _ellipsoidal_to_geometric."""
     calls = {}
 
     def fake_convert(lats, lons, heights, crs):
@@ -394,7 +394,7 @@ def test_readZ_sf_geoid_request_converts_from_ellipsoidal(monkeypatch, station_f
 
     monkeypatch.setattr('RAiDER.llreader._ellipsoidal_to_geometric', fake_convert)
 
-    query = StationFile(station_file, crs=4979)
+    query = StationFile(station_file, height_datum='ellipsoidal')
     z = query.readZ(geoid_heights=True)
 
     assert calls.get('called') is True
@@ -518,7 +518,7 @@ def test_readZ_sf_dem_download_default_converts_to_ellipsoidal(monkeypatch, tmp_
 def test_readZ_sf_write_back_then_read_again_stays_consistent(tmp_path, monkeypatch):
     """Regression test for the stale-_crs bug.
 
-    The object is built declaring crs=4979 (ellipsoidal), but the DEM branch
+    The object is built declaring height_datum='ellipsoidal', but the DEM branch
     fills in geoid heights -- so the declared datum is wrong for what actually
     lands in the file. Both reads must still agree: the first because it knows
     what it just wrote, the second because the Hgt_datum column and the
@@ -538,7 +538,7 @@ def test_readZ_sf_write_back_then_read_again_stays_consistent(tmp_path, monkeypa
     monkeypatch.setattr('RAiDER.dem.download_dem', fake_download_dem)
     monkeypatch.setattr('RAiDER.interpolator.interpolateDEM', fake_interpolateDEM)
 
-    query = StationFile(csv_path, crs=4979, output_directory=tmp_path)
+    query = StationFile(csv_path, height_datum='ellipsoidal', output_directory=tmp_path)
 
     z1 = query.readZ(geoid_heights=True)  # DEM branch: writes geoid Hgt_m
     z2 = query.readZ(geoid_heights=True)  # Hgt_m exists now; must read as geoid
@@ -680,7 +680,7 @@ def test_readZ_sf_datum_column_still_converts_against_2d_crs(tmp_path, monkeypat
 
     monkeypatch.setattr('RAiDER.llreader._ellipsoidal_to_geometric', fake_convert)
 
-    query = StationFile(csv_path, crs=4326)
+    query = StationFile(csv_path, height_datum='geoid')
     z = query.readZ(geoid_heights=True)
 
     # A 3D CRS must be handed down, or the conversion is a silent no-op.
@@ -752,7 +752,7 @@ def test_readZ_sf_datum_column_protects_against_wrong_crs(tmp_path, monkeypatch)
     # A second, independent object is constructed with a *wrong* crs -- 4979,
     # ellipsoidal, when the file actually holds geoid heights. Without the
     # column this would silently misread the file; with it, the column wins.
-    second = StationFile(csv_path, crs=4979)
+    second = StationFile(csv_path, height_datum='ellipsoidal')
     assert np.allclose(second.readZ(geoid_heights=True), 100.0)  # no conversion needed
 
 
@@ -895,3 +895,56 @@ def test_geometric_to_ellipsoidal_real_grid_los_angeles():
         f'geoid - ellipsoidal = {undulation:.2f} m, expected roughly {low}-{high} m near LA '
         '(a negative value here would mean the conversion is inverted)'
     )
+
+
+# ---------------------------------------------------------------------------
+# height_datum / dem_height_datum vocabulary
+# ---------------------------------------------------------------------------
+
+def test_parse_height_datum_accepts_datum_words():
+    """The run config, the Hgt_datum column and these constructors all speak
+    the same two words, rather than EPSG codes."""
+    assert _parse_height_datum('ellipsoidal') == CRS.from_epsg(4979)
+    assert _parse_height_datum('geoid') == CRS.from_epsg(9518)
+    # case and stray whitespace from a hand-edited YAML shouldn't matter
+    assert _parse_height_datum(' Geoid ') == CRS.from_epsg(9518)
+    assert _parse_height_datum('ELLIPSOIDAL') == CRS.from_epsg(4979)
+
+
+def test_stationfile_dem_height_datum_governs_dem_branch(tmp_path, monkeypatch):
+    """dem_height_datum is what a custom DEM is declared with, and it decides
+    both the label written into the CSV and whether a conversion is needed."""
+    csv_path = tmp_path / 'stations_no_hgt.csv'
+    csv_path.write_text('ID,Lat,Lon\nA,34.0,-118.0\nB,35.0,-117.0\n')
+
+    def fake_download_dem(*args, **kwargs):
+        return None, None
+
+    def fake_interpolateDEM(dem_file, ll):
+        lats, _ = ll
+        return np.eye(len(lats)) * 100.0
+
+    monkeypatch.setattr('RAiDER.dem.download_dem', fake_download_dem)
+    monkeypatch.setattr('RAiDER.interpolator.interpolateDEM', fake_interpolateDEM)
+
+    # A DEM declared ellipsoidal needs no conversion for the default request,
+    # and must be labelled as such in the file it writes back.
+    query = StationFile(csv_path, dem_height_datum='ellipsoidal', output_directory=tmp_path)
+    assert np.allclose(query.readZ(), 100.0)
+    assert query._crs == CRS.from_epsg(4979)
+
+    df = pd.read_csv(csv_path)
+    assert (df[HGT_DATUM_COLUMN] == 'ellipsoidal').all()
+
+
+def test_geocodedfile_dem_height_datum_ellipsoidal_skips_conversion(monkeypatch):
+    """A custom DEM declared ellipsoidal is returned untouched by default."""
+    aoi = GeocodedFile(SCENARIO0_DIR / 'small_dem.tif', is_dem=True, dem_height_datum='ellipsoidal')
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError('no conversion should be needed')
+
+    monkeypatch.setattr('RAiDER.llreader._ellipsoidal_to_geometric', fail_if_called)
+    monkeypatch.setattr('RAiDER.llreader._geometric_to_ellipsoidal', fail_if_called)
+
+    aoi.readZ()

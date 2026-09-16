@@ -77,12 +77,6 @@ aoi_group:
   lon_file:
   station_file:
 
-  ## Height datum of station_file's Hgt_m column, as an EPSG code.
-  ## 4979 (default): WGS84 ellipsoidal heights (e.g. from GNSS/UNR MAGNET or IGS20).
-  ## 4326: geoid-referenced (MSL) heights, e.g. from a DEM.
-  ## Ignored if station_file has an Hgt_datum column (that takes precedence) or is not set.
-  station_file_crs: 4979
-
 
 ########## 5. Height info
 ## REQUIRED: FALSE
@@ -100,6 +94,20 @@ height_group:
   use_dem_latlon: False
   height_file_rdr:
   height_levels:
+
+  ## Datum of the heights supplied for the query points -- i.e. a station
+  ## file's Hgt_m column. Either 'ellipsoidal' or 'geoid'.
+  ## 'ellipsoidal' (default): heights above the WGS84 ellipsoid, which is what
+  ##   GNSS positions (UNR MAGNET, IGS20) and ISCE geometry rasters carry.
+  ## 'geoid': heights above the geoid / mean sea level.
+  ## Ignored if the station file has an Hgt_datum column, which takes precedence.
+  height_datum: ellipsoidal
+
+  ## Datum of the DEM, whether downloaded by RAiDER or supplied above via 'dem'.
+  ## 'geoid' (default): the native datum of GLO-30 and SRTM, and of anything
+  ##   RAiDER downloads itself.
+  ## 'ellipsoidal': for a custom DEM already referenced to the WGS84 ellipsoid.
+  dem_height_datum: geoid
 
 
 ########## 6. Line-of-sight or zenith calculations
