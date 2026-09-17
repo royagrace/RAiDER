@@ -28,7 +28,7 @@ def pytest_collection_modifyitems(config, items):
 # Weather-model fixture directories that are tracked in git. `combine_weather_files`
 # writes its time-interpolated product next to its inputs, so a fixture that hands a
 # test one of these paths instead of the scratch directory built by
-# `_linked_weather_files` will overwrite or pile up derived models inside the repo.
+# `_linked_weather_files` will overwrite tracked inputs or leave derived models in the repo.
 # Nothing should ever appear here during a test run; the session hooks below turn that
 # into a visible failure rather than something you find later in `git status`.
 _TRACKED_WEATHER_DIRS = (
@@ -81,8 +81,9 @@ def _linked_weather_files(tmp_path_factory, src_dir: Path, names: list[str]) -> 
     inputs (`wfiles[0].parent`, see RAiDER.cli.raider), so handing tests paths
     inside the tracked fixture directories makes every run deposit derived
     `_timeInterp_` / `_timeInterpAziGrid_` files there -- overwriting the
-    checked-in copies under test/gunw_test_data, and silently accumulating
-    ~165 MB under test/gunw_azimuth_test_data, which .gitignore hides.
+    checked-in copies under test/gunw_test_data, and rewriting ~135 MB into
+    test/gunw_azimuth_test_data. The derived names come from the GUNW scene's
+    fixed center time, so each run overwrites the last rather than piling up.
 
     Symlinking keeps that behaviour intact while redirecting the output: the
     links are read through transparently, nothing is copied, and
