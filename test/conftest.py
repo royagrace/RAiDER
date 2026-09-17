@@ -25,6 +25,55 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip_isce3)
 
 
+# Weather-model fixture directories that are tracked in git. `combine_weather_files`
+# writes its time-interpolated product next to its inputs, so a fixture that hands a
+# test one of these paths instead of the scratch directory built by
+# `_linked_weather_files` will overwrite or pile up derived models inside the repo.
+# Nothing should ever appear here during a test run; the session hooks below turn that
+# into a visible failure rather than something you find later in `git status`.
+_TRACKED_WEATHER_DIRS = (
+    TEST_DIR / 'weather_files',
+    TEST_DIR / 'gunw_test_data' / 'weather_files',
+    TEST_DIR / 'gunw_azimuth_test_data' / 'weather_files',
+)
+
+
+def _weather_fixture_files() -> set:
+    """Every file currently sitting in a tracked weather-model fixture directory."""
+    return {f for d in _TRACKED_WEATHER_DIRS for f in d.rglob('*') if f.is_file()}
+
+
+def pytest_sessionstart(session):
+    session.config._weather_fixture_files = _weather_fixture_files()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if a test deposited a weather model in a tracked fixture directory.
+
+    Compares against the session-start snapshot rather than asserting the directories
+    are empty, so pre-existing leftovers from an older checkout do not masquerade as a
+    regression introduced by this run.
+    """
+    before = getattr(session.config, '_weather_fixture_files', None)
+    if before is None:
+        return
+    written = sorted(str(f.relative_to(TEST_DIR)) for f in _weather_fixture_files() - before)
+    if not written:
+        return
+
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    reporter = session.config.pluginmanager.get_plugin('terminalreporter')
+    if reporter is None:
+        return
+    reporter.write_sep('=', 'weather models written into tracked fixture directories', red=True)
+    for name in written:
+        reporter.write_line(f'  test/{name}')
+    reporter.write_line(
+        'A fixture handed a test a repo path instead of a scratch directory. '
+        'Route it through _linked_weather_files in test/conftest.py, then delete the files above.'
+    )
+
+
 def _linked_weather_files(tmp_path_factory, src_dir: Path, names: list[str]) -> list[Path]:
     """Expose weather-model files from a scratch directory instead of the repo.
 

@@ -2,7 +2,6 @@ from RAiDER.cli.raider import calcDelays
 import pytest
 import glob
 import os
-import subprocess
 
 import numpy as np
 import xarray as xr
