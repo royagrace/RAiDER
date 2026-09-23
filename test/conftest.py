@@ -74,14 +74,24 @@ def pytest_sessionfinish(session, exitstatus):
     )
 
 
-def _linked_weather_files(tmp_path_factory, src_dir: Path, names: list[str]) -> list[Path]:
+# One scratch directory per source directory, shared by every fixture that draws
+# from it. Two fixtures expose the same gunw_azimuth_test_data/weather_files with
+# different orderings; without this they would each get their own mktemp, so the
+# two interpolation styles would write into separate directories instead of the
+# single one they shared before the fixtures were redirected out of the repo.
+_LINK_DIRS: dict[Path, Path] = {}
+
+
+def _linked_weather_files(
+    tmp_path_factory: pytest.TempPathFactory, src_dir: Path, names: list[str]
+) -> list[Path]:
     """Expose weather-model files from a scratch directory instead of the repo.
 
     `combine_weather_files` writes the time-interpolated product next to its
     inputs (`wfiles[0].parent`, see RAiDER.cli.raider), so handing tests paths
     inside the tracked fixture directories makes every run deposit derived
     `_timeInterp_` / `_timeInterpAziGrid_` files there -- overwriting the
-    checked-in copies under test/gunw_test_data, and rewriting ~135 MB into
+    checked-in copies under test/gunw_test_data, and rewriting ~165 MB into
     test/gunw_azimuth_test_data. The derived names come from the GUNW scene's
     fixed center time, so each run overwrites the last rather than piling up.
 
@@ -90,10 +100,28 @@ def _linked_weather_files(tmp_path_factory, src_dir: Path, names: list[str]) -> 
     `wfiles[0].parent` resolves to the scratch directory. Paths are not
     resolved anywhere in the delay workflow, so the symlink parent is what the
     writer sees.
+
+    Args:
+        tmp_path_factory: pytest's session-scoped temporary directory factory.
+        src_dir: Tracked directory holding the real weather-model files.
+        names: File names to expose, in the order the caller needs them.
+
+    Returns:
+        Paths to the symlinks, in the same order as `names`.
     """
-    work = tmp_path_factory.mktemp(src_dir.name)
+    work = _LINK_DIRS.get(src_dir)
+    if work is None:
+        work = _LINK_DIRS[src_dir] = tmp_path_factory.mktemp(src_dir.name)
     for name in names:
-        (work / name).symlink_to(src_dir / name)
+        src = src_dir / name
+        # symlink_to happily creates a dangling link, which would otherwise
+        # surface much later as a FileNotFoundError on a /tmp path that says
+        # nothing about which fixture name was wrong.
+        if not src.exists():
+            raise FileNotFoundError(f'missing weather-model fixture: {src}')
+        link = work / name
+        if not link.exists():
+            link.symlink_to(src)
     return [work / name for name in names]
 
 
