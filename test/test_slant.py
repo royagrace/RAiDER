@@ -1,13 +1,12 @@
 from RAiDER.cli.raider import calcDelays
 import pytest
-import glob
 import os
 
 import numpy as np
 import xarray as xr
 
 from test import (
-    WM_DIR, ORB_DIR, make_delay_name
+    WM_DIR, ORB_DIR, make_delay_name, pushd
 )
 from RAiDER.utilFcns import write_yaml
 
@@ -42,7 +41,8 @@ def test_slant_proj(weather_model_name, tmp_path):
     cfg = write_yaml(grp, tmp_path / 'temp.yaml')
 
     # run raider and intersect
-    calcDelays([str(cfg)])
+    with pushd(tmp_path):
+        calcDelays([str(cfg)])
 
     gold = {'ERA5': [33.4, -117.8, 0, 2.3324788251164725]}
     lat, lon, hgt, val = gold[weather_model_name]
@@ -53,9 +53,6 @@ def test_slant_proj(weather_model_name, tmp_path):
             y=lat, x=lon, z=hgt, method='nearest').item()
 
     np.testing.assert_almost_equal(val, delay)
-
-    # Clean up files written outside tmp_path
-    [os.remove(f) for f in glob.glob(f'{weather_model_name}*')]
 
 
 @pytest.mark.parametrize('weather_model_name', ['ERA5'])
@@ -88,7 +85,8 @@ def test_ray_tracing(weather_model_name, tmp_path):
     cfg = write_yaml(grp, tmp_path / 'temp.yaml')
 
     # run raider and intersect
-    calcDelays([str(cfg)])
+    with pushd(tmp_path):
+        calcDelays([str(cfg)])
 
     # model to lat/lon/correct value
     gold = {'ERA5': [33.4, -117.8, 0, 2.9756965061161926]}
@@ -100,6 +98,3 @@ def test_ray_tracing(weather_model_name, tmp_path):
         delay = (ds['hydro'] + ds['wet']).sel(
             y=lat, x=lon, z=hgt, method='nearest').item()
     np.testing.assert_almost_equal(val, delay)
-
-    # Clean up files written outside tmp_path
-    [os.remove(f) for f in glob.glob(f'{weather_model_name}*')]
