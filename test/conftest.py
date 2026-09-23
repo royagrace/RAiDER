@@ -101,6 +101,12 @@ def _linked_weather_files(
     resolved anywhere in the delay workflow, so the symlink parent is what the
     writer sees.
 
+    The redirect covers newly created files only. Symlinks are read-through for
+    writes as well, so anything that rewrote one of these inputs in place would
+    write straight into the tracked copy rather than into the scratch directory.
+    Note also that `symlink_to` needs Developer Mode or an elevated shell on
+    Windows; the suite is exercised on Linux, natively or under WSL.
+
     Args:
         tmp_path_factory: pytest's session-scoped temporary directory factory.
         src_dir: Tracked directory holding the real weather-model files.
@@ -199,6 +205,29 @@ def weather_model_dict_for_center_time_test(tmp_path_factory):
         'HRRR_2021_07_11_T01_00_00_33N_36N_120W_115W.nc',
         'HRRR_2021_07_11_T02_00_00_33N_36N_120W_115W.nc',
     ])}
+
+
+@pytest.fixture(scope='session')
+def weather_model_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Scratch stand-in for the tracked test/weather_files directory.
+
+    Tests that set `weather_model_directory` are handed a directory of symlinks
+    rather than the tracked one. `prepareWeatherModel` only writes a model when
+    the file it wants is absent, and `os.path.exists` follows symlinks, so the
+    committed crops are still found and nothing is downloaded. The difference is
+    where a *miss* lands: a bounding box that no committed crop covers now writes
+    the fresh model into the scratch directory instead of into the repository.
+
+    Note that symlinks are read-through for writes as well, so this redirects
+    newly created files only. Anything that rewrote a weather file in place would
+    still write through into the tracked copy.
+
+    Returns:
+        The scratch directory to pass as `weather_model_directory`.
+    """
+    src_dir = TEST_DIR / 'weather_files'
+    names = sorted(f.name for f in src_dir.iterdir() if f.is_file())
+    return _linked_weather_files(tmp_path_factory, src_dir, names)[0].parent
 
 
 @pytest.fixture(scope='session')

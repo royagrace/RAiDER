@@ -6,13 +6,13 @@ import numpy as np
 import xarray as xr
 
 from test import (
-    WM_DIR, ORB_DIR, make_delay_name, pushd
+    ORB_DIR, make_delay_name, pushd
 )
 from RAiDER.utilFcns import write_yaml
 
 
 @pytest.mark.parametrize('weather_model_name', ['ERA5'])
-def test_slant_proj(weather_model_name, tmp_path):
+def test_slant_proj(weather_model_name, tmp_path, weather_model_dir):
     SCENARIO_DIR = tmp_path / "scenario_3"
 
     # make the lat lon grid
@@ -28,7 +28,7 @@ def test_slant_proj(weather_model_name, tmp_path):
         'weather_model': weather_model_name,
         'aoi_group': {'bounding_box': [S, N, W, E]},
         'runtime_group': {'output_directory': SCENARIO_DIR,
-                          'weather_model_directory': WM_DIR,
+                          'weather_model_directory': weather_model_dir,
                           },
         'los_group': {'ray_trace': False,
                       'orbit_file': os.path.join(ORB_DIR,
@@ -56,7 +56,7 @@ def test_slant_proj(weather_model_name, tmp_path):
 
 
 @pytest.mark.parametrize('weather_model_name', ['ERA5'])
-def test_ray_tracing(weather_model_name, tmp_path):
+def test_ray_tracing(weather_model_name, tmp_path, weather_model_dir):
     SCENARIO_DIR = tmp_path / "scenario_3"
 
     # make the lat lon grid
@@ -72,7 +72,7 @@ def test_ray_tracing(weather_model_name, tmp_path):
         'weather_model': weather_model_name,
         'aoi_group': {'bounding_box': [S, N, W, E]},
         'runtime_group': {'output_directory': SCENARIO_DIR,
-                          'weather_model_directory': WM_DIR,
+                          'weather_model_directory': weather_model_dir,
                           },
         'los_group': {'ray_trace': True,
                       'orbit_file': os.path.join(ORB_DIR,
