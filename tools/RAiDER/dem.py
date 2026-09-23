@@ -25,31 +25,24 @@ DEM_DATUM_TAG = 'RAIDER_HEIGHT_DATUM'
 DEM_DATUM = 'geoid'
 
 
-def _check_cached_dem_datum(dem_path: Path) -> None:
-    """Warn if a reused DEM may predate the switch to geoid-referenced heights.
+def _cached_dem_is_stale(dem_path: Path) -> bool:
+    """Whether a reused DEM may predate the switch to geoid-referenced heights.
 
     download_dem() reuses whatever is already at dem_path without re-reading
     its provenance, and a DEM written by an earlier RAiDER holds *ellipsoidal*
     heights. Treating those as geoid displaces them by the geoid undulation --
     ~35 m in CONUS -- and for StationFile that wrong datum then gets written
     into the user's CSV as an authoritative Hgt_datum label.
+
+    Only DEMs RAiDER wrote carry the tag, so this must never be applied to a
+    user-supplied DEM: that one's datum is declared through dem_height_datum
+    and its lack of a tag says nothing at all.
     """
     try:
         with rasterio.open(dem_path) as ds:
-            datum = ds.tags().get(DEM_DATUM_TAG)
+            return ds.tags().get(DEM_DATUM_TAG) != DEM_DATUM
     except Exception:  # unreadable tags shouldn't break the read that follows
-        return
-
-    if datum == DEM_DATUM:
-        return
-
-    logger.warning(
-        'Reusing DEM %s, which carries no RAiDER height-datum tag. DEMs '
-        'written by earlier versions hold ellipsoidal heights, but heights '
-        'are now read as geoid-referenced -- a ~35 m difference in CONUS. '
-        'Delete it to re-download if it predates this version.',
-        dem_path,
-    )
+        return False
 
 
 def download_dem(
@@ -58,6 +51,7 @@ def download_dem(
     overwrite: bool = False,
     writeDEM: bool = False,
     buf: float = 0.02,
+    user_supplied: bool = False,
 ) -> tuple[np.ndarray, Optional[RIO.Profile]]:
     """Download a DEM if one is not already present.
 
@@ -67,12 +61,35 @@ def download_dem(
         overwrite: bool                     - overwrite existing DEM
         writeDEM: bool                      - write the DEM to file
         buf: float                          - buffer to add to the bounds
+        user_supplied: bool                 - dem_path is the user's own DEM, not a RAiDER cache
     Returns:
         zvals: np.array                 - DEM heights
         metadata:                       - metadata for the DEM
     """
     if dem_path.exists():
         download = overwrite
+        # A DEM written before RAiDER switched to geoid-referenced heights holds
+        # ellipsoidal ones, so reusing it displaces every height by the geoid
+        # undulation (~35 m in CONUS) from an otherwise unchanged config. Re-fetch
+        # rather than warn and continue: the stale file is the entire problem, and
+        # a log line is easy to miss in a long run -- or suppressed outright by a
+        # downstream caller that reconfigured logging.
+        if not download and not user_supplied and _cached_dem_is_stale(dem_path):
+            if ll_bounds is None:
+                logger.warning(
+                    'Reusing DEM %s, which carries no RAiDER height-datum tag. DEMs '
+                    'written by earlier versions hold ellipsoidal heights, but heights '
+                    'are now read as geoid-referenced -- a ~35 m difference in CONUS. '
+                    'Delete it to force a re-download.',
+                    dem_path,
+                )
+            else:
+                logger.warning(
+                    'Discarding DEM %s: it carries no RAiDER height-datum tag, so it may '
+                    'predate the switch to geoid-referenced heights. Re-downloading.',
+                    dem_path,
+                )
+                download = True
     else:
         download = True
 
@@ -81,7 +98,6 @@ def download_dem(
 
     if not download:
         logger.info('Using existing DEM: %s', dem_path)
-        _check_cached_dem_datum(dem_path)
         zvals, metadata = rio_open(dem_path)
     else:
         # download the dem

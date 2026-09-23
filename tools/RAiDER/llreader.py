@@ -6,6 +6,7 @@
 # RESERVED. United States Government Sponsorship acknowledged.
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+import logging
 import os
 import warnings
 from pathlib import Path
@@ -201,6 +202,11 @@ def _is_geoid_crs(crs: CRS) -> bool:
     (ellipsoidal) both have three. What separates them is that a geoid CRS is
     compound -- a horizontal CRS paired with a separate vertical datum --
     while a 3D geographic CRS carries an ellipsoidal height axis directly.
+
+    Note this treats *any* compound CRS as geoid-referenced. A compound CRS
+    whose vertical component is itself ellipsoidal would be misclassified; that
+    is not a combination RAiDER constructs or accepts through
+    _parse_height_datum, but the test is a heuristic rather than a general one.
     """
     return crs == _EGM2008_CRS or bool(crs.sub_crs_list)
 
@@ -333,7 +339,10 @@ def _convert_height_datum(
         from pyproj import Transformer
 
         t = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
-        _, _, h = t.transform(lons, lats, heights)
+        # errcheck=True is essential: pyproj's default returns inf on a failed
+        # transform, and a missing grid behind an unreachable CDN fails exactly
+        # that way. Raising routes it into the warn-and-return-unchanged path.
+        _, _, h = t.transform(lons, lats, heights, errcheck=True)
         return t, h
 
     def _is_noop(t) -> bool:
@@ -384,20 +393,33 @@ def _convert_height_datum(
         _warn_conversion_unavailable(str(exc))
         return heights
 
+    # errcheck=True turns PROJ's own failures into exceptions, but a transform
+    # can still hand back non-finite values where it could not solve, and inf
+    # heights would flow on into ECEF geometry and cube interpolation unnoticed.
+    # Compare only against inputs that were finite to begin with: NaN is routine
+    # for DEM tiles with nodata gaps and must survive the round trip untouched.
+    h_out = np.asarray(h_out)
+    finite_in = np.isfinite(heights)
+    if not np.isfinite(h_out[finite_in]).all():
+        _warn_conversion_unavailable('the transform returned non-finite heights')
+        return heights
+
     # Outside the try: a failure in the logging below must not discard a
     # conversion that already succeeded. np.nanmean warns (and raises, under
     # warnings-as-errors) on an all-NaN difference, which is routine for DEM
-    # tiles with nodata gaps.
-    try:
-        offset = float(np.nanmean(h_out - heights))
-    except (ValueError, RuntimeWarning):
-        offset = float('nan')
-    logger.debug(
-        'Converted heights from %s to %s; mean offset applied: %.2f m',
-        src_crs.name,
-        dst_crs.name,
-        offset,
-    )
+    # tiles with nodata gaps. It is also a full extra pass over the array, so
+    # it only runs when something will actually read the result.
+    if logger.isEnabledFor(logging.DEBUG):
+        try:
+            offset = float(np.nanmean(h_out - heights))
+        except (ValueError, RuntimeWarning):
+            offset = float('nan')
+        logger.debug(
+            'Converted heights from %s to %s; mean offset applied: %.2f m',
+            src_crs.name,
+            dst_crs.name,
+            offset,
+        )
     return h_out
 
 
@@ -553,6 +575,9 @@ class StationFile(AOI):
                 self._bounding_box,
                 writeDEM=True,
                 dem_path=Path(demFile),
+                # A DEM the user supplied carries no RAiDER tag by definition; its
+                # datum comes from dem_height_datum, so it must not be second-guessed.
+                user_supplied=self._demfile is not None,
             )
 
             # interpolate the DEM to the query points
@@ -670,6 +695,9 @@ class RasterRDR(AOI):
                 self._bounding_box,
                 writeDEM=True,
                 dem_path=Path(demFile),
+                # A DEM the user supplied carries no RAiDER tag by definition; its
+                # datum comes from dem_height_datum, so it must not be second-guessed.
+                user_supplied=self._demfile is not None,
             )
             hgts = interpolateDEM(demFile, self.readLL())
             source_is_geoid = _is_geoid_crs(self._dem_crs)
@@ -764,7 +792,7 @@ class GeocodedFile(AOI):
 
         demFile = self._filename if self._is_dem else 'GLO30_fullres_dem.tif'
         bbox = self._bounding_box
-        _, _ = download_dem(bbox, writeDEM=True, dem_path=Path(demFile))
+        _, _ = download_dem(bbox, writeDEM=True, dem_path=Path(demFile), user_supplied=self._is_dem)
         lats, lons = self.readLL()
         z_out = interpolateDEM(demFile, (lats, lons))
 

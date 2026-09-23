@@ -27,6 +27,9 @@ from RAiDER.llreader import (
     _geometric_to_ellipsoidal,
     _source_is_geoid,
     _is_geoid_crs,
+    _convert_height_datum,
+    _EGM2008_CRS,
+    _WGS84_3D_CRS,
     HGT_DATUM_COLUMN,
 )
 
@@ -65,14 +68,20 @@ def patch_transformer(monkeypatch):
     call received ('src'/'dst' from the last call, 'calls' for all of them).
     """
 
-    def install(offset=0.0, proj4='+proj=pipeline', raises=None):
+    def install(offset=0.0, proj4='+proj=pipeline', raises=None,
+                transform_result=None, transform_raises=None):
         record = {'calls': []}
 
         class _FakeTransformer:
             def to_proj4(self):
                 return proj4
 
-            def transform(self, lons, lats, heights):
+            def transform(self, lons, lats, heights, errcheck=False):
+                record['errcheck'] = errcheck
+                if transform_raises is not None:
+                    raise transform_raises
+                if transform_result is not None:
+                    return lons, lats, np.full(np.shape(heights), transform_result, dtype=float)
                 return lons, lats, heights + offset
 
         def fake_from_crs(src_crs, dst_crs, always_xy=True):
@@ -948,3 +957,64 @@ def test_geocodedfile_dem_height_datum_ellipsoidal_skips_conversion(monkeypatch)
     monkeypatch.setattr('RAiDER.llreader._geometric_to_ellipsoidal', fail_if_called)
 
     aoi.readZ()
+
+
+def test_convert_height_datum_requests_errcheck(patch_transformer):
+    """Without errcheck pyproj returns inf instead of raising, and inf is what a
+    missing grid behind an unreachable CDN produces."""
+    record = patch_transformer(offset=-30.0)
+    _convert_height_datum(
+        np.array([34.0]), np.array([-118.0]), np.array([100.0]), _WGS84_3D_CRS, _EGM2008_CRS
+    )
+    assert record['errcheck'] is True
+
+
+def test_convert_height_datum_returns_input_when_transform_yields_inf(patch_transformer):
+    """The invariant the whole module exists to protect: never hand back a height
+    that is worse than the bias being corrected.
+
+    PROJ reports a grid-based pipeline it cannot fetch as a real operation, so
+    to_proj4() returns None rather than '+proj=noop' and the no-op heuristic does
+    not fire. inf must still not escape.
+    """
+    patch_transformer(proj4=None, transform_result=np.inf)
+    heights = np.array([10.0, 20.0, 30.0])
+
+    with pytest.warns(UserWarning, match='non-finite'):
+        out = _convert_height_datum(
+            np.array([34.0, 34.1, 34.2]), np.array([-118.0, -118.1, -118.2]),
+            heights, _WGS84_3D_CRS, _EGM2008_CRS,
+        )
+
+    np.testing.assert_array_equal(out, heights)
+
+
+def test_convert_height_datum_warns_when_transform_raises(patch_transformer):
+    """errcheck=True surfaces a missing grid as ProjError; that must become the
+    documented warn-and-return-unchanged path, not a crash."""
+    patch_transformer(transform_raises=pyproj.exceptions.ProjError('Network error'))
+    heights = np.array([10.0, 20.0])
+
+    with pytest.warns(UserWarning, match='Network error'):
+        out = _convert_height_datum(
+            np.array([34.0, 34.1]), np.array([-118.0, -118.1]),
+            heights, _WGS84_3D_CRS, _EGM2008_CRS,
+        )
+
+    np.testing.assert_array_equal(out, heights)
+
+
+def test_convert_height_datum_preserves_nan_inputs(patch_transformer):
+    """NaN is routine for DEM tiles with nodata gaps, so a NaN that was already in
+    the input must not be read as a failed conversion and discard the good values."""
+    patch_transformer(offset=-30.0)
+    heights = np.array([10.0, np.nan, 30.0])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')  # any warning here means NaN was misread
+        out = _convert_height_datum(
+            np.array([34.0, 34.1, 34.2]), np.array([-118.0, -118.1, -118.2]),
+            heights, _WGS84_3D_CRS, _EGM2008_CRS,
+        )
+
+    np.testing.assert_allclose(out, [-20.0, np.nan, 0.0], equal_nan=True)

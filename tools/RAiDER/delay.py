@@ -373,7 +373,12 @@ def writeResultsToXarray(datetime: dt.datetime, xpts, ypts, zpts, crs, wetDelay,
     # Write z-axis information
     ds.z.attrs['axis'] = 'Z'
     ds.z.attrs['units'] = 'm'
-    ds.z.attrs['description'] = 'height above geoid'
+    # The zenith and projected paths interpolate these levels against the
+    # geoid-referenced weather model, but _build_cube_ray consumes the same
+    # levels as ellipsoidal heights for its ECEF geometry (see #824). Describe
+    # the cube that was actually produced rather than asserting one convention
+    # for both and being confidently wrong in half the cases.
+    ds.z.attrs['description'] = 'height above ellipsoid' if 'raytracing' in out_type else 'height above geoid'
 
     # If in degrees
     if crs.axis_info[0].unit_name == 'degree':

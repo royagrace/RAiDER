@@ -227,3 +227,46 @@ def test_download_dem_does_not_warn_on_tagged_cached_dem(fake_stitcher, tmp_path
         download_dem(dem_path=dem_path)
 
     assert 'height-datum tag' not in caplog.text
+
+
+def test_download_dem_redownloads_untagged_cached_dem(fake_stitcher, tmp_path, caplog):
+    """A warning is not proportionate to a ~35 m silent datum error.
+
+    An untagged cache predates the switch to geoid-referenced heights and holds
+    ellipsoidal ones, so it is discarded and refetched rather than reinterpreted.
+    """
+    dem_path = tmp_path / 'dem.tif'
+    bounds = [34.0, 34.5, -118.5, -118.0]
+    download_dem(ll_bounds=bounds, dem_path=dem_path, writeDEM=True)
+
+    # Strip the tag to mimic a DEM written by an earlier version
+    with rasterio.open(dem_path, 'r+') as ds:
+        ds.update_tags(**{DEM_DATUM_TAG: ''})
+    fake_stitcher.pop('bounds', None)
+
+    with caplog.at_level(logging.WARNING):
+        download_dem(ll_bounds=bounds, dem_path=dem_path, writeDEM=True)
+
+    assert 'bounds' in fake_stitcher, 'stale DEM was reused instead of refetched'
+    assert 'Re-downloading' in caplog.text
+    with rasterio.open(dem_path) as ds:
+        assert ds.tags()[DEM_DATUM_TAG] == DEM_DATUM
+
+
+def test_download_dem_does_not_second_guess_user_supplied_dem(fake_stitcher, tmp_path, caplog):
+    """A user's own DEM never carries a RAiDER tag, so its absence says nothing.
+
+    Its datum comes from dem_height_datum; warning about it on every custom-DEM
+    run would train users to ignore the message that matters.
+    """
+    dem_path = tmp_path / 'my_own_dem.tif'
+    download_dem(ll_bounds=[34.0, 34.5, -118.5, -118.0], dem_path=dem_path, writeDEM=True)
+    with rasterio.open(dem_path, 'r+') as ds:
+        ds.update_tags(**{DEM_DATUM_TAG: ''})
+    fake_stitcher.pop('bounds', None)
+
+    with caplog.at_level(logging.WARNING):
+        download_dem(ll_bounds=[34.0, 34.5, -118.5, -118.0], dem_path=dem_path, user_supplied=True)
+
+    assert 'bounds' not in fake_stitcher, "user's DEM was overwritten"
+    assert 'height-datum tag' not in caplog.text
