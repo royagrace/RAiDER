@@ -38,7 +38,7 @@ _TRACKED_WEATHER_DIRS = (
 )
 
 
-def _weather_fixture_files() -> set:
+def _weather_fixture_files() -> set[Path]:
     """Every file currently sitting in a tracked weather-model fixture directory."""
     return {f for d in _TRACKED_WEATHER_DIRS for f in d.rglob('*') if f.is_file()}
 
@@ -61,7 +61,11 @@ def pytest_sessionfinish(session, exitstatus):
     if not written:
         return
 
-    session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    # Only promote a clean run to a failure. An interrupted or misconfigured
+    # session already carries a more specific code, and overwriting it with
+    # TESTS_FAILED would hide why the run actually stopped.
+    if exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
     reporter = session.config.pluginmanager.get_plugin('terminalreporter')
     if reporter is None:
         return
